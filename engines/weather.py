@@ -104,7 +104,7 @@ class WeatherEngine:
         ]
         for url in urls:
             try:
-                resp = httpx.get(url, timeout=8.0, verify=False, follow_redirects=True)
+                resp = httpx.get(url, timeout=8.0, follow_redirects=True)
                 if resp.status_code != 200:
                     continue
                 data = resp.json()

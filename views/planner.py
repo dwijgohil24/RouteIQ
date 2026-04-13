@@ -626,21 +626,31 @@ def page_planner(stops_df, ai, ml, dash):
 
         if st.button("🚀 Generate Custom Itinerary", key="gen_custom"):
             custom_stops = []
+            parse_errors = []
             for i, line in enumerate(custom_text.strip().split("\n")):
+                line = line.strip()
+                if not line:
+                    continue
                 parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 3:
-                    try:
-                        custom_stops.append({
-                            "stop_id": f"CS{i+1}", "location_name": parts[0],
-                            "lat": float(parts[1]), "lon": float(parts[2]),
-                            "stop_type":         parts[3] if len(parts) > 3 else "Delivery",
-                            "priority":          parts[4] if len(parts) > 4 else "Medium",
-                            "time_window_start": parts[5] if len(parts) > 5 else "08:00",
-                            "time_window_end":   parts[6] if len(parts) > 6 else "18:00",
-                            "notes": "",
-                        })
-                    except ValueError:
-                        pass
+                if len(parts) < 3:
+                    parse_errors.append(f"Line {i+1}: need at least Name, Lat, Lon — got: `{line}`")
+                    continue
+                try:
+                    custom_stops.append({
+                        "stop_id": f"CS{i+1}", "location_name": parts[0],
+                        "lat": float(parts[1]), "lon": float(parts[2]),
+                        "stop_type":         parts[3] if len(parts) > 3 else "Delivery",
+                        "priority":          parts[4] if len(parts) > 4 else "Medium",
+                        "time_window_start": parts[5] if len(parts) > 5 else "08:00",
+                        "time_window_end":   parts[6] if len(parts) > 6 else "18:00",
+                        "notes": "",
+                    })
+                except ValueError:
+                    parse_errors.append(f"Line {i+1}: lat/lon must be numbers — got `{parts[1]}`, `{parts[2]}`")
+
+            if parse_errors:
+                for msg in parse_errors:
+                    st.warning(f"⚠️ {msg}")
 
             if not custom_stops:
                 st.error("No valid stops parsed. Check the format.")
