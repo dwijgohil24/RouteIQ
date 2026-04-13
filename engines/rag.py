@@ -73,12 +73,18 @@ class RAGEngine:
     ]
 
     def __init__(self, llm, embeddings):
-        self.llm        = llm
-        self.embeddings = embeddings
-        self._vectordb  = None
+        self.llm          = llm
+        self.embeddings   = embeddings
+        self._vectordb    = None
+        self._build_failed = False   # don't retry a permanently broken build
+
+    def warm_up(self, kb_df):
+        """Call once at startup (inside cached AIEngine) to pre-build the vector index."""
+        if not kb_df.empty and self.embeddings is not None and self._vectordb is None:
+            self._build_vectordb(kb_df)
 
     def _build_vectordb(self, kb_df):
-        if self._vectordb is not None or self.embeddings is None:
+        if self._vectordb is not None or self.embeddings is None or self._build_failed:
             return
         raw_docs, metadatas = [], []
         for _, row in kb_df.iterrows():
@@ -97,7 +103,8 @@ class RAGEngine:
                 chunks, self.embeddings, metadatas=chunk_metas, persist_directory="./chroma_kb"
             )
         except Exception:
-            self._vectordb = None
+            self._vectordb  = None
+            self._build_failed = True
 
     def _retrieve(self, question, k=5):
         if self._vectordb is None:
@@ -138,7 +145,8 @@ class RAGEngine:
     def answer(self, question, kb_df):
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        if not kb_df.empty and self.embeddings is not None and self._vectordb is None:
+        # Build on first answer call only if warm_up wasn't called at startup
+        if not kb_df.empty and self.embeddings is not None and self._vectordb is None and not self._build_failed:
             with st.spinner("📚 Indexing knowledge base…"):
                 self._build_vectordb(kb_df)
 

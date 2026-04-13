@@ -1,7 +1,7 @@
 import os
 
 # Tiktoken cache must be set before any langchain/tiktoken import
-_tiktoken_cache_dir = os.path.abspath("./token")
+_tiktoken_cache_dir = os.path.expanduser("~/.cache/routeiq/token")
 os.makedirs(_tiktoken_cache_dir, exist_ok=True)
 os.environ["TIKTOKEN_CACHE_DIR"] = _tiktoken_cache_dir
 
@@ -33,18 +33,41 @@ from views import (
 inject_css()
 
 
-def main():
-    init_session()
+@st.cache_resource(show_spinner="🤖 Loading AI engine…")
+def get_ai_engine():
+    return AIEngine()
 
+
+@st.cache_resource(show_spinner=False)
+def get_ml_engine():
+    return MLEngine()
+
+
+@st.cache_resource(show_spinner=False)
+def get_dashboard():
+    return Dashboard()
+
+
+@st.cache_data(show_spinner="📂 Loading data…", ttl=300)
+def get_data():
     loader = DataLoader()
-    ai     = AIEngine()
-    ml     = MLEngine()
-    dash   = Dashboard()
-
     stops_df  = loader.load_stops()
     routes_df = loader.load_routes()
     kb_df     = loader.load_kb()
     stats     = loader.get_summary_stats(stops_df, routes_df)
+    return stops_df, routes_df, kb_df, stats
+
+
+def main():
+    init_session()
+
+    ai                                 = get_ai_engine()
+    ml                                 = get_ml_engine()
+    dash                               = get_dashboard()
+    stops_df, routes_df, kb_df, stats  = get_data()
+
+    # Pre-build RAG index once (no-op on subsequent reruns thanks to cache)
+    ai.warm_up_rag(kb_df)
 
     with st.sidebar:
         st.markdown(

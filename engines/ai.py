@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from .ml import MLEngine
 from .rag import RAGEngine
+from .fuel import FuelEngine
 
 
 class AIEngine:
@@ -43,8 +44,8 @@ class AIEngine:
         try:
             resp = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
             return resp.content
-        except Exception as e:
-            return f"[LLM Error: {e}]"
+        except Exception:
+            return None
 
     def _parse_json(self, text, fallback):
         if text is None:
@@ -181,7 +182,7 @@ class AIEngine:
         raw    = self._call(system_prompt, user_prompt)
         result = self._parse_json(raw, self._rule_based_itinerary(stops_list, constraints))
 
-        coords     = [(s["lat"], s["lon"]) for s in stops_list]
+        coords     = [(s["lat"], s["lon"]) for s in stops_list if s.get("lat") is not None and s.get("lon") is not None]
         osrm       = MLEngine.osrm_route(coords)
         result["routing_source"] = osrm["source"]
         itin_stops = result.get("stops", [])
@@ -199,7 +200,9 @@ class AIEngine:
                 osrm["total_duration_min"]
                 + sum(s.get("service_duration_min", 0) for s in itin_stops), 1
             )
-            result["estimated_fuel_cost_inr"] = round(osrm["total_distance_km"] * 8, 0)
+            vehicle_type = constraints.get("vehicle_type", "Van") if isinstance(constraints, dict) else "Van"
+            fuel_detail  = FuelEngine.compute_fuel_cost(osrm["total_distance_km"], vehicle_type)
+            result["estimated_fuel_cost_inr"] = fuel_detail["total_cost_inr"]
 
         return result
 
@@ -211,10 +214,12 @@ class AIEngine:
         ))
         current_time = datetime.strptime(constraints.get("start_time", "08:00"), "%H:%M")
         result_stops, total_dist = [], 0
-        prev_lat = stops_list[0]["lat"] if stops_list else 19.076
-        prev_lon = stops_list[0]["lon"] if stops_list else 72.877
+        prev_lat = stops_list[0].get("lat", 19.076) if stops_list else 19.076
+        prev_lon = stops_list[0].get("lon", 72.877) if stops_list else 72.877
 
         for i, s in enumerate(sorted_stops):
+            if s.get("lat") is None or s.get("lon") is None:
+                continue
             dist        = MLEngine.compute_distance_km(prev_lat, prev_lon, s["lat"], s["lon"])
             travel_min  = max(5, int(dist / 35 * 60))
             service_min = {"Delivery": 20, "Pickup": 15, "Meeting": 45,
@@ -240,17 +245,19 @@ class AIEngine:
             current_time = departure
             prev_lat, prev_lon = s["lat"], s["lon"]
 
+        vehicle_type = constraints.get("vehicle_type", "Van")
+        fuel_detail  = FuelEngine.compute_fuel_cost(total_dist, vehicle_type)
         return {
             "itinerary_title": "Optimized Route (Rule-based fallback)",
             "driver": constraints.get("driver_name", "Driver"),
-            "vehicle": constraints.get("vehicle_type", "Truck"),
+            "vehicle": vehicle_type,
             "date": datetime.now().strftime("%Y-%m-%d"),
             "transport_mode": constraints.get("transport_mode", "Road"),
             "total_distance_km": round(total_dist, 2),
             "total_duration_min": sum(
                 s["travel_time_from_prev_min"] + s["service_duration_min"] for s in result_stops
             ),
-            "estimated_fuel_cost_inr": round(total_dist * 8, 0),
+            "estimated_fuel_cost_inr": fuel_detail["total_cost_inr"],
             "stops": result_stops,
             "optimization_notes": "Rule-based fallback: sorted by priority then time window.",
             "warnings": ["LLM offline — using rule-based optimizer"],
@@ -289,8 +296,19 @@ class AIEngine:
             except Exception:
                 return base
 
-        max_hours = constraints.get("max_hours", 10)
-        day_end   = to_dt(constraints.get("start_time", "08:00")) + timedelta(hours=max_hours)
+        max_hours      = constraints.get("max_hours", 10)
+        day_end        = to_dt(constraints.get("start_time", "08:00")) + timedelta(hours=max_hours)
+        capacity_kg    = constraints.get("vehicle_capacity_kg")
+        total_load_kg  = sum(s.get("load_kg", 0) for s in stops)
+        if capacity_kg and total_load_kg > capacity_kg:
+            violations.append({
+                "sequence": 0, "location_name": "All stops",
+                "type": "capacity", "severity": "Critical",
+                "detail": (
+                    f"Total load {total_load_kg} kg exceeds vehicle capacity "
+                    f"{capacity_kg} kg by {total_load_kg - capacity_kg} kg."
+                ),
+            })
 
         for s in stops:
             arr          = to_dt(s.get("arrival_time",   "00:00"))
@@ -335,6 +353,10 @@ class AIEngine:
 
         return violations
 
+    def warm_up_rag(self, kb_df):
+        """Pre-build the RAG vector index. Call once after data is loaded."""
+        self.rag.warm_up(kb_df)
+
     def get_kb_answer(self, question, kb_df):
         return self.rag.answer(question, kb_df)
 
@@ -350,7 +372,7 @@ class AIEngine:
             "You are a logistics analytics expert. Provide 3-5 concise actionable insights.",
             f"Performance data:\n{json.dumps(summary, indent=2)}\n\nBullet point insights:"
         )
-        if not raw or raw.startswith("[LLM"):
+        if not raw:
             return (
                 "• Review high-delay routes for recurring traffic patterns\n"
                 "• Adjust time windows for stops that are consistently late\n"

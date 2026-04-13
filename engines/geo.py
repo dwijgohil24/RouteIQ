@@ -30,7 +30,7 @@ class GeoEngine:
             try:
                 resp = httpx.get(
                     url, params=params, headers=headers,
-                    timeout=6.0, verify=False, follow_redirects=True,
+                    timeout=6.0, follow_redirects=True,
                 )
                 if resp.status_code != 200:
                     continue
