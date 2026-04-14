@@ -9,6 +9,7 @@ from engines.ml import MLEngine
 from engines.weather import WeatherEngine
 from engines.fuel import FuelEngine
 from engines.geo import GeoEngine
+from engines.map_renderer import render_animated_map_in_streamlit
 
 
 # ─────────────────────────────────────────────
@@ -273,42 +274,52 @@ def _render_fuel_panel(stops_list: list, constraints: dict, itin: dict):
 
         nn_order  = MLEngine().nearest_neighbor_route([(s["lat"], s["lon"]) for s in stops_list])
         opt_stops = [stops_list[i] for i in nn_order]
-        lats      = [s["lat"]  for s in opt_stops]
-        lons      = [s["lon"]  for s in opt_stops]
-        names     = [s["location_name"] for s in opt_stops]
-        colors_map = {
-            "Delivery": "#D4A843", "Pickup": "#3FB950", "Meeting": "#2EA4A4",
-            "Warehouse": "#8957E5", "Customs": "#E74C3C", "Rest": "#8B949E",
-        }
-        pt_colors = [colors_map.get(s.get("stop_type", "Delivery"), "#3FB950") for s in opt_stops]
 
-        fig_opt = go.Figure()
-        fig_opt.add_trace(go.Scattergeo(
-            lat=lats, lon=lons, mode="lines",
-            line=dict(width=2.5, color="#3FB950"), name="Optimized Route",
-        ))
-        fig_opt.add_trace(go.Scattergeo(
-            lat=lats, lon=lons, mode="markers+text",
-            marker=dict(size=13, color=pt_colors, line=dict(color="#0D1117", width=1)),
-            text=[f"{i+1}. {n}" for i, n in enumerate(names)],
-            textposition="top center",
-            textfont=dict(size=9, color="#C9D1D9"),
-            hovertemplate="<b>%{text}</b><extra></extra>",
-            name="Stops",
-        ))
-        fig_opt.update_geos(
-            center=dict(lat=np.mean(lats), lon=np.mean(lons)), projection_scale=8,
-            showland=True, landcolor="#21262D", showocean=True, oceancolor="#161B22",
-            showcountries=True, countrycolor="#30363D", showcoastlines=True, coastlinecolor="#30363D",
-        )
-        fig_opt.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#C9D1D9", height=420,
-            margin=dict(t=10, b=10, l=10, r=10),
-            geo=dict(bgcolor="rgba(0,0,0,0)"),
-            showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)"),
-        )
-        st.plotly_chart(fig_opt, use_container_width=True, key="opt_route_map")
+        use_anim_opt = st.checkbox("🚗 Animate optimized route", value=True, key="anim_opt_toggle")
+        if use_anim_opt:
+            render_animated_map_in_streamlit(
+                stops_list=opt_stops,
+                vehicle_type="Car",
+                animation_duration_s=4.0,
+                height=420,
+            )
+        else:
+            lats      = [s["lat"]  for s in opt_stops]
+            lons      = [s["lon"]  for s in opt_stops]
+            names     = [s["location_name"] for s in opt_stops]
+            colors_map = {
+                "Delivery": "#D4A843", "Pickup": "#3FB950", "Meeting": "#2EA4A4",
+                "Warehouse": "#8957E5", "Customs": "#E74C3C", "Rest": "#8B949E",
+            }
+            pt_colors = [colors_map.get(s.get("stop_type", "Delivery"), "#3FB950") for s in opt_stops]
+
+            fig_opt = go.Figure()
+            fig_opt.add_trace(go.Scattergeo(
+                lat=lats, lon=lons, mode="lines",
+                line=dict(width=2.5, color="#3FB950"), name="Optimized Route",
+            ))
+            fig_opt.add_trace(go.Scattergeo(
+                lat=lats, lon=lons, mode="markers+text",
+                marker=dict(size=13, color=pt_colors, line=dict(color="#0D1117", width=1)),
+                text=[f"{i+1}. {n}" for i, n in enumerate(names)],
+                textposition="top center",
+                textfont=dict(size=9, color="#C9D1D9"),
+                hovertemplate="<b>%{text}</b><extra></extra>",
+                name="Stops",
+            ))
+            fig_opt.update_geos(
+                center=dict(lat=np.mean(lats), lon=np.mean(lons)), projection_scale=8,
+                showland=True, landcolor="#21262D", showocean=True, oceancolor="#161B22",
+                showcountries=True, countrycolor="#30363D", showcoastlines=True, coastlinecolor="#30363D",
+            )
+            fig_opt.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#C9D1D9", height=420,
+                margin=dict(t=10, b=10, l=10, r=10),
+                geo=dict(bgcolor="rgba(0,0,0,0)"),
+                showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)"),
+            )
+            st.plotly_chart(fig_opt, use_container_width=True, key="opt_route_map")
 
     rs = analysis.get("routing_source", "")
     if rs == "osrm":
@@ -362,7 +373,26 @@ def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_overr
 
     if stops_list:
         st.markdown("### 🗺️ Route Map")
-        st.plotly_chart(dash.route_map_scatter(stops_list, itin), use_container_width=True)
+
+        # Determine vehicle type from constraints for the animated icon
+        _vehicle = constraints.get("vehicle_type", "Car") if constraints else "Car"
+
+        # Toggle: animated vs static map
+        use_animated = st.checkbox("🚗 Animate vehicle on route", value=True, key="anim_map_toggle")
+
+        if use_animated:
+            render_animated_map_in_streamlit(
+                stops_list=stops_list,
+                itinerary=itin,
+                vehicle_type=_vehicle,
+                animation_duration_s=4.0,
+                height=500,
+            )
+            st.caption(
+                f"🎬 {_vehicle} animation · Tap stops for details · Tap **↻ Replay** to rewatch"
+            )
+        else:
+            st.plotly_chart(dash.route_map_scatter(stops_list, itin), use_container_width=True)
 
     st.markdown("### 📍 Stop Sequence")
     itin_stops = sorted(itin.get("stops", []), key=lambda x: x["sequence"])
