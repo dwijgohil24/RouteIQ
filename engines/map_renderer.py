@@ -239,133 +239,9 @@ def render_animated_route_map(
     .vehicle-icon-wrapper {{ background:none!important; border:none!important; }}
     #routeiq-vehicle {{ filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }}
 
-    /* ── Legend ── */
-    #routeiq-legend {{
-        background: rgba(13,17,23,0.92);
-        border: 1px solid #30363D;
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        font-size: 11px;
-        color: #C9D1D9;
-        line-height: 1.7;
-        max-width: 160px;
-        backdrop-filter: blur(6px);
-        -webkit-backdrop-filter: blur(6px);
-    }}
-    #routeiq-legend-title {{
-        font-weight: 700;
-        color: #F0F6FC;
-        font-size: 11px;
-        margin-bottom: 2px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        cursor: pointer;
-        user-select: none;
-        -webkit-user-select: none;
-    }}
-    #routeiq-legend-title .arrow {{
-        font-size: 9px;
-        transition: transform 0.2s;
-    }}
-    #routeiq-legend-body {{ transition: max-height 0.3s ease, opacity 0.2s; overflow: hidden; }}
-
-    /* ── Replay button ── */
-    #routeiq-replay {{
-        background: rgba(13,17,23,0.92);
-        border: 1px solid #30363D;
-        border-radius: 8px;
-        padding: 6px 14px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        font-size: 12px;
-        color: #D4A843;
-        cursor: pointer;
-        backdrop-filter: blur(6px);
-        -webkit-backdrop-filter: blur(6px);
-        white-space: nowrap;
-    }}
-    #routeiq-replay:hover {{ background: rgba(30,35,44,0.95); }}
-    #routeiq-replay:active {{ transform: scale(0.97); }}
-
-    /* ── Mobile: screens < 480px ── */
-    @media (max-width: 480px) {{
-        #routeiq-legend {{
-            font-size: 10px;
-            padding: 6px 10px;
-            max-width: 130px;
-            line-height: 1.5;
-        }}
-        #routeiq-legend-title {{ font-size: 10px; }}
-        #routeiq-legend .legend-item {{ font-size: 10px; }}
-        #routeiq-legend .legend-dot {{
-            width: 8px; height: 8px; margin-right: 4px;
-        }}
-        /* Auto-collapse legend on mobile */
-        #routeiq-legend-body {{ max-height: 0; opacity: 0; }}
-        #routeiq-legend-title .arrow {{ transform: rotate(-90deg); }}
-
-        #routeiq-replay {{
-            font-size: 11px;
-            padding: 5px 10px;
-        }}
-    }}
-
-    /* ── Tablet: 481-768px ── */
-    @media (min-width: 481px) and (max-width: 768px) {{
-        #routeiq-legend {{ font-size: 10px; max-width: 145px; }}
-        #routeiq-replay {{ font-size: 11px; }}
-    }}
-
-    /* ── Push Leaflet bottom controls up so they don't clip at iframe edge ── */
-    .leaflet-bottom {{ margin-bottom: 10px; }}
-    .leaflet-bottom.leaflet-left  {{ margin-left:  10px; }}
-    .leaflet-bottom.leaflet-right {{ margin-right: 10px; }}
     </style>
 
-    <div id="routeiq-legend">
-        <div id="routeiq-legend-title" onclick="toggleLegend()">
-            Route legend <span class="arrow">&#9660;</span>
-        </div>
-        <div id="routeiq-legend-body">
-            {legend_items}
-            <div style="margin-top:3px;border-top:1px solid #30363D;padding-top:3px">
-                <span style="color:#D4A843">- - -</span> Planned route<br>
-                <span style="color:#3FB950">___</span> Vehicle trail
-            </div>
-        </div>
-    </div>
-
-    <div id="routeiq-replay" onclick="if(window._routeiqReplay)window._routeiqReplay()">
-        &#x21bb; Replay
-    </div>
-
     <script>
-    // Legend toggle (collapsed by default on mobile, open on desktop)
-    function toggleLegend() {{
-        var body = document.getElementById('routeiq-legend-body');
-        var arrow = document.querySelector('#routeiq-legend-title .arrow');
-        if (!body) return;
-        if (body.style.maxHeight && body.style.maxHeight !== '0px') {{
-            body.style.maxHeight = '0px';
-            body.style.opacity = '0';
-            if (arrow) arrow.style.transform = 'rotate(-90deg)';
-        }} else {{
-            body.style.maxHeight = '200px';
-            body.style.opacity = '1';
-            if (arrow) arrow.style.transform = 'rotate(0deg)';
-        }}
-    }}
-
-    // Auto-expand legend on desktop, keep collapsed on mobile
-    (function() {{
-        var mq = window.matchMedia('(min-width: 481px)');
-        if (mq.matches) {{
-            var body = document.getElementById('routeiq-legend-body');
-            if (body) {{ body.style.maxHeight = '200px'; body.style.opacity = '1'; }}
-        }}
-    }})();
-
     // ── Vehicle animation ──
     (function() {{
         var path = {json.dumps(interpolated)};
@@ -436,30 +312,6 @@ def render_animated_route_map(
 
         function run(map) {{
             _map = map;
-
-            // Register legend and replay as native Leaflet controls — this is the
-            // only approach that works reliably inside Folium's overflow:hidden iframe.
-            var LegendCtl = L.Control.extend({{
-                options: {{ position: 'bottomleft' }},
-                onAdd: function() {{
-                    var el = document.getElementById('routeiq-legend');
-                    L.DomEvent.disableClickPropagation(el);
-                    L.DomEvent.disableScrollPropagation(el);
-                    return el;
-                }}
-            }});
-            new LegendCtl().addTo(map);
-
-            var ReplayCtl = L.Control.extend({{
-                options: {{ position: 'bottomright' }},
-                onAdd: function() {{
-                    var el = document.getElementById('routeiq-replay');
-                    L.DomEvent.disableClickPropagation(el);
-                    return el;
-                }}
-            }});
-            new ReplayCtl().addTo(map);
-
             startAnim();
         }}
 
@@ -480,10 +332,40 @@ def render_animated_route_map(
 
 def render_animated_map_in_streamlit(
     stops_list: list, itinerary: dict = None,
-    vehicle_type: str = "Car", animation_duration_s: float = 4.0, height: int = 700,
+    vehicle_type: str = "Car", animation_duration_s: float = 4.0, height: int = 500,
     route_geometry: list = None,
 ):
-    """Render the animated route map directly in Streamlit."""
+    """Render animated map, then show legend + replay button outside the canvas."""
+    import streamlit as st
+
     html = render_animated_route_map(
         stops_list, itinerary, vehicle_type, animation_duration_s, height, route_geometry)
     components.html(html, height=height, scrolling=False)
+
+    # ── Legend + Replay rendered by Streamlit — fully outside the map iframe ─
+    col_leg, col_rep = st.columns([5, 1])
+    with col_leg:
+        dots = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:5px;'
+            f'margin-right:14px;white-space:nowrap">'
+            f'<span style="display:inline-block;width:10px;height:10px;'
+            f'border-radius:50%;background:{c};flex-shrink:0"></span>'
+            f'<span style="color:#C9D1D9;font-size:0.78rem">{t}</span></span>'
+            for t, c in STOP_COLORS.items()
+        )
+        st.markdown(
+            f'<div style="display:flex;flex-wrap:wrap;align-items:center;'
+            f'padding:4px 0 0 0;gap:2px">'
+            f'<span style="color:#8B949E;font-size:0.78rem;font-weight:600;'
+            f'margin-right:10px">Legend:</span>'
+            f'{dots}'
+            f'<span style="color:#8B949E;font-size:0.78rem;margin-left:6px">'
+            f'<span style="color:#D4A843">&#8211;&#8211;</span>&nbsp;Planned&nbsp;&nbsp;'
+            f'<span style="color:#3FB950">&#9135;</span>&nbsp;Vehicle trail</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with col_rep:
+        if st.button("↺ Replay", key=f"riq_replay_{id(stops_list)}",
+                     use_container_width=True):
+            st.rerun()

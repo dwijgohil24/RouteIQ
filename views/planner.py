@@ -542,8 +542,18 @@ def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_overr
             st.download_button("⬇️ Download CSV", pd.DataFrame(stop_rows).to_csv(index=False),
                                "itinerary_stops.csv", "text/csv", use_container_width=True)
     with col_e3:
+        default_name = itin.get("driver") or "Ramesh"
+        pdf_author = st.text_input(
+            "Prepared by (PDF)",
+            value=default_name,
+            key="pdf_prepared_by",
+            placeholder="Your name…",
+        )
         try:
-            pdf_bytes = generate_itinerary_pdf(itin, constraints)
+            pdf_bytes = generate_itinerary_pdf(
+                itin, constraints,
+                prepared_by=(pdf_author.strip() or "Ramesh"),
+            )
             fname = f"routeiq_itinerary_{itin.get('date', 'export')}.pdf"
             st.download_button("⬇️ Download PDF", pdf_bytes,
                                fname, "application/pdf", use_container_width=True)
