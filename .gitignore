@@ -3,6 +3,7 @@ venv/
 env/
 .venv/
 chroma_kb/
+data_60/
 
 # Python cache
 __pycache__/

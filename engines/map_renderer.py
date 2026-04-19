@@ -155,6 +155,7 @@ def render_animated_route_map(
     vehicle_type: str = "Car",
     animation_duration_s: float = 4.0,
     map_height: int = 500,
+    route_geometry: list = None,
 ) -> str:
     """Build a Folium map with animated vehicle tracing the route."""
     if not stops_list:
@@ -182,7 +183,8 @@ def render_animated_route_map(
 
     # Planned route polyline (dashed gold)
     route_coords = [[s["lat"], s["lon"]] for s in ordered_stops]
-    folium.PolyLine(route_coords, color="#D4A843", weight=3,
+    polyline_coords = route_geometry if (route_geometry and len(route_geometry) >= 2) else route_coords
+    folium.PolyLine(polyline_coords, color="#D4A843", weight=3,
                     opacity=0.7, dash_array="8 4").add_to(m)
 
     # Stop markers
@@ -220,7 +222,8 @@ def render_animated_route_map(
 
     # ── Animation + Legend + Replay ──────────────────────────────────────
     vehicle = VEHICLE_ICONS.get(vehicle_type, VEHICLE_ICONS["Car"])
-    interpolated = _interpolate_path(route_coords, num_points=80)
+    anim_coords = route_geometry if (route_geometry and len(route_geometry) >= 2) else route_coords
+    interpolated = _interpolate_path(anim_coords, num_points=80)
     interval_ms = int((animation_duration_s * 1000) / max(len(interpolated), 1))
     svg_esc = vehicle["svg"].replace("\\", "\\\\").replace("`", "\\`")
 
@@ -235,20 +238,6 @@ def render_animated_route_map(
     <style>
     .vehicle-icon-wrapper {{ background:none!important; border:none!important; }}
     #routeiq-vehicle {{ filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }}
-
-    /* ── Overlay container (anchored to map, not viewport) ── */
-    #routeiq-overlays {{
-        position: absolute;
-        bottom: 0; left: 0; right: 0;
-        z-index: 9999;
-        pointer-events: none;
-        padding: 10px;
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        gap: 8px;
-    }}
-    #routeiq-overlays > * {{ pointer-events: auto; }}
 
     /* ── Legend ── */
     #routeiq-legend {{
@@ -295,14 +284,12 @@ def render_animated_route_map(
         backdrop-filter: blur(6px);
         -webkit-backdrop-filter: blur(6px);
         white-space: nowrap;
-        flex-shrink: 0;
     }}
     #routeiq-replay:hover {{ background: rgba(30,35,44,0.95); }}
     #routeiq-replay:active {{ transform: scale(0.97); }}
 
     /* ── Mobile: screens < 480px ── */
     @media (max-width: 480px) {{
-        #routeiq-overlays {{ padding: 6px; gap: 6px; }}
         #routeiq-legend {{
             font-size: 10px;
             padding: 6px 10px;
@@ -329,25 +316,28 @@ def render_animated_route_map(
         #routeiq-legend {{ font-size: 10px; max-width: 145px; }}
         #routeiq-replay {{ font-size: 11px; }}
     }}
+
+    /* ── Push Leaflet bottom controls up so they don't clip at iframe edge ── */
+    .leaflet-bottom {{ margin-bottom: 10px; }}
+    .leaflet-bottom.leaflet-left  {{ margin-left:  10px; }}
+    .leaflet-bottom.leaflet-right {{ margin-right: 10px; }}
     </style>
 
-    <div id="routeiq-overlays">
-        <div id="routeiq-legend">
-            <div id="routeiq-legend-title" onclick="toggleLegend()">
-                Route legend <span class="arrow">&#9660;</span>
-            </div>
-            <div id="routeiq-legend-body">
-                {legend_items}
-                <div style="margin-top:3px;border-top:1px solid #30363D;padding-top:3px">
-                    <span style="color:#D4A843">- - -</span> Planned route<br>
-                    <span style="color:#3FB950">___</span> Vehicle trail
-                </div>
+    <div id="routeiq-legend">
+        <div id="routeiq-legend-title" onclick="toggleLegend()">
+            Route legend <span class="arrow">&#9660;</span>
+        </div>
+        <div id="routeiq-legend-body">
+            {legend_items}
+            <div style="margin-top:3px;border-top:1px solid #30363D;padding-top:3px">
+                <span style="color:#D4A843">- - -</span> Planned route<br>
+                <span style="color:#3FB950">___</span> Vehicle trail
             </div>
         </div>
+    </div>
 
-        <div id="routeiq-replay" onclick="location.reload()">
-            &#x21bb; Replay
-        </div>
+    <div id="routeiq-replay" onclick="if(window._routeiqReplay)window._routeiqReplay()">
+        &#x21bb; Replay
     </div>
 
     <script>
@@ -384,6 +374,8 @@ def render_animated_route_map(
         var iconAnchor = {json.dumps(vehicle["anchor"])};
         var intervalMs = {interval_ms};
 
+        var _map = null, _marker = null, _trail = null, _tid = null;
+
         function findMap() {{
             for (var key in window) {{
                 if (key.indexOf('map_') === 0) {{
@@ -398,24 +390,28 @@ def render_animated_route_map(
             return null;
         }}
 
-        function run(map) {{
-            var step = 0;
+        function bearing(p1, p2) {{
+            var dLon = (p2[1]-p1[1])*Math.PI/180;
+            var la1 = p1[0]*Math.PI/180, la2 = p2[0]*Math.PI/180;
+            var y = Math.sin(dLon)*Math.cos(la2);
+            var x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
+            return ((Math.atan2(y,x)*180/Math.PI)+360)%360;
+        }}
+
+        function startAnim() {{
+            if (_tid) {{ clearTimeout(_tid); _tid = null; }}
+            if (_marker) {{ try {{ _map.removeLayer(_marker); }} catch(e) {{}} _marker = null; }}
+            if (_trail)  {{ try {{ _map.removeLayer(_trail);  }} catch(e) {{}} _trail  = null; }}
+
             var icon = L.divIcon({{
                 html: '<div id="routeiq-vehicle" style="transition:transform 0.08s linear">' + vehicleSvg + '</div>',
                 iconSize: iconSize, iconAnchor: iconAnchor,
                 className: 'vehicle-icon-wrapper',
             }});
-            var marker = L.marker(path[0], {{ icon: icon, zIndexOffset: 1000 }}).addTo(map);
-            var trail = L.polyline([], {{ color: '#3FB950', weight: 4, opacity: 0.9 }}).addTo(map);
+            _marker = L.marker(path[0], {{ icon: icon, zIndexOffset: 1000 }}).addTo(_map);
+            _trail  = L.polyline([], {{ color: '#3FB950', weight: 4, opacity: 0.9 }}).addTo(_map);
 
-            function bearing(p1, p2) {{
-                var dLon = (p2[1]-p1[1])*Math.PI/180;
-                var la1 = p1[0]*Math.PI/180, la2 = p2[0]*Math.PI/180;
-                var y = Math.sin(dLon)*Math.cos(la2);
-                var x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
-                return ((Math.atan2(y,x)*180/Math.PI)+360)%360;
-            }}
-
+            var step = 0;
             function tick() {{
                 if (step >= path.length) {{
                     var el = document.getElementById('routeiq-vehicle');
@@ -423,17 +419,48 @@ def render_animated_route_map(
                     return;
                 }}
                 var pos = path[step];
-                marker.setLatLng(pos);
-                trail.addLatLng(pos);
-                if (step < path.length-1) {{
-                    var b = bearing(pos, path[step+1]);
+                _marker.setLatLng(pos);
+                _trail.addLatLng(pos);
+                if (step < path.length - 1) {{
+                    var b = bearing(pos, path[step + 1]);
                     var el = document.getElementById('routeiq-vehicle');
-                    if (el) el.style.transform = 'rotate('+(b-90)+'deg)';
+                    if (el) el.style.transform = 'rotate(' + (b - 90) + 'deg)';
                 }}
                 step++;
-                setTimeout(tick, intervalMs);
+                _tid = setTimeout(tick, intervalMs);
             }}
-            setTimeout(tick, 800);
+            _tid = setTimeout(tick, 800);
+        }}
+
+        window._routeiqReplay = function() {{ if (_map) startAnim(); }};
+
+        function run(map) {{
+            _map = map;
+
+            // Register legend and replay as native Leaflet controls — this is the
+            // only approach that works reliably inside Folium's overflow:hidden iframe.
+            var LegendCtl = L.Control.extend({{
+                options: {{ position: 'bottomleft' }},
+                onAdd: function() {{
+                    var el = document.getElementById('routeiq-legend');
+                    L.DomEvent.disableClickPropagation(el);
+                    L.DomEvent.disableScrollPropagation(el);
+                    return el;
+                }}
+            }});
+            new LegendCtl().addTo(map);
+
+            var ReplayCtl = L.Control.extend({{
+                options: {{ position: 'bottomright' }},
+                onAdd: function() {{
+                    var el = document.getElementById('routeiq-replay');
+                    L.DomEvent.disableClickPropagation(el);
+                    return el;
+                }}
+            }});
+            new ReplayCtl().addTo(map);
+
+            startAnim();
         }}
 
         var attempts = 0;
@@ -453,9 +480,10 @@ def render_animated_route_map(
 
 def render_animated_map_in_streamlit(
     stops_list: list, itinerary: dict = None,
-    vehicle_type: str = "Car", animation_duration_s: float = 4.0, height: int = 500,
+    vehicle_type: str = "Car", animation_duration_s: float = 4.0, height: int = 700,
+    route_geometry: list = None,
 ):
     """Render the animated route map directly in Streamlit."""
     html = render_animated_route_map(
-        stops_list, itinerary, vehicle_type, animation_duration_s, height)
+        stops_list, itinerary, vehicle_type, animation_duration_s, height, route_geometry)
     components.html(html, height=height, scrolling=False)

@@ -53,7 +53,7 @@ h1, h2, h3 {
 [data-testid="metric-container"] [data-testid="stMetricValue"] {
   color: var(--gold) !important;
   font-family: 'Playfair Display', serif !important;
-  font-size: 2rem !important;
+  font-size: 1.4rem !important;
 }
 details {
   background: var(--obsidian) !important;
@@ -101,9 +101,9 @@ textarea, input[type="text"] {
 .card-green { border-left: 4px solid var(--sage); }
 .card-blue  { border-left: 4px solid var(--blue); }
 
-.section-title { font-family: 'Playfair Display', serif; font-size: 1.6rem; color: var(--white); margin-bottom: 4px; }
-.section-sub   { color: var(--ink); font-size: 0.85rem; margin-bottom: 20px; letter-spacing: 0.04em; }
-.hero-title    { font-family: 'Playfair Display', serif; font-size: 2.8rem; font-weight: 900; color: var(--white); line-height: 1.1; }
+.section-title { font-family: 'Playfair Display', serif; font-size: 1.1rem; color: var(--white); margin-bottom: 4px; }
+.section-sub   { color: var(--ink); font-size: 0.8rem; margin-bottom: 20px; letter-spacing: 0.04em; }
+.hero-title    { font-family: 'Playfair Display', serif; font-size: 2.0rem; font-weight: 900; color: var(--white); line-height: 1.1; }
 .hero-accent   { color: var(--gold); }
 
 .stop-card { background: var(--charcoal); border: 1px solid var(--steel); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
@@ -144,6 +144,7 @@ def init_session():
         "fuel_analysis":       None,
         "itinerary_source":    None,
         "nl_stops_for_map":    [],
+        "road_geometry":       None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:

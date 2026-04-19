@@ -1,25 +1,26 @@
-# 🗺️ RouteIQ — AI-Powered Logistics Itinerary Planner
+# RouteIQ — AI-Powered Logistics Itinerary Planner
 
-> A generative AI agent that accepts delivery/travel constraints and outputs optimized, step-by-step itineraries with real road distances, weather forecasts, fuel cost analysis, risk flags, and live re-planning — all inside a polished Streamlit dashboard.
+> A generative AI agent that accepts delivery/travel constraints and outputs optimized, step-by-step itineraries with real road distances, animated route maps, weather forecasts, fuel cost analysis, risk flags, and live re-planning — all inside a polished Streamlit dashboard.
 
 ---
 
-## ✨ Features
+## Features
 
 | Module | What it does |
 |---|---|
 | **Overview Dashboard** | Daily stop volume, type distribution donut, route distance rankings, priority breakdown, high-priority open stops feed |
 | **Itinerary Planner** | Three input modes (dataset, custom coordinates, natural language) → AI-generated optimized itinerary with sequence, times, real road distances, risk flags, weather forecast per stop, and fuel cost analysis |
+| **Animated Route Map** | Interactive Folium/Leaflet map with a vehicle icon that animates along road-following polylines (OSRM geometry); legend and replay button anchored to the visible map area |
 | **Clustering Engine** | TF-IDF + KMeans unsupervised clustering of stops, PCA 2D scatter, keyword profiles, geographic scatter map |
 | **AI Assistant** | Conversational chatbot grounded in a logistics knowledge base via RAG (semantic retrieval + ChromaDB); out-of-scope questions are politely declined |
 | **Performance Analytics** | On-time rate gauge, fuel cost by mode, delay reason analysis, transport mode trends, AI-generated insights |
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-final_show/
+RouteIQ/
 ├── app.py               — entry point: Streamlit config, caching, page routing
 ├── config.py            — CSS injection, session state initialisation
 ├── data.py              — DataLoader: loads stops.csv, routes.csv, logistics_kb.csv (auto-generates if missing)
@@ -31,7 +32,9 @@ final_show/
 │   ├── rag.py           — RAGEngine: ChromaDB vector store, semantic retrieval, KB Q&A
 │   ├── fuel.py          — FuelEngine: city fuel prices, vehicle efficiency, savings analysis
 │   ├── weather.py       — WeatherEngine: Open-Meteo hourly forecasts, seasonal fallback
-│   └── geo.py           — GeoEngine: Nominatim reverse geocoding
+│   ├── geo.py           — GeoEngine: Nominatim reverse geocoding
+│   ├── map_renderer.py  — Animated Folium/Leaflet route map with road geometry & overlay anchoring
+│   └── pdf_exporter.py  — Branded PDF export: per-page header/footer, stops table, about page
 │
 ├── views/
 │   ├── overview.py      — page_overview()
@@ -89,20 +92,13 @@ final_show/
 
 ---
 
-## 🚀 Setup & Run
+## Setup & Run
 
-### 1. Clone / copy project files
+### 1. Clone the repository
 
-```
-final_show/
-├── app.py
-├── config.py
-├── data.py
-├── dashboard.py
-├── engines/
-├── views/
-├── requirements.txt
-└── .env          ← create this (see step 4)
+```bash
+git clone https://github.com/YOUR_USERNAME/RouteIQ.git
+cd RouteIQ
 ```
 
 ### 2. Create a virtual environment
@@ -146,43 +142,53 @@ Open [http://localhost:8501](http://localhost:8501)
 
 ---
 
-## 📊 Pages Walkthrough
+## Pages Walkthrough
 
-### 📊 Overview
+### Overview
 Landing dashboard. Volume timeline by stop type, type distribution donut, top routes by distance, priority breakdown, and a live feed of high-priority open stops.
 
-### 🔍 Itinerary Planner
+### Itinerary Planner
 
 Three input modes:
 
-**Dataset mode** — Select any route from the loaded stop data, configure driver/vehicle/time constraints, and optionally apply Nearest-Neighbor optimization. Road distances are fetched from the public OSRM API (Haversine fallback if unreachable). The AI generates a full structured itinerary with an interactive Scattergeo map, color-coded stop sequence, arrival/departure times, and risk flags.
+**Dataset mode** — Select any route from the loaded stop data. The dropdown shows `RT-100  (12 stops: Dadar Warehouse → Thane Depot)` style labels for quick context. Configure driver/vehicle/time constraints and optionally apply Nearest-Neighbor optimization. Road distances and road-following polylines are fetched from the public OSRM API (Haversine straight-line fallback if unreachable).
 
 **Custom Coordinates mode** — Paste comma-delimited stops (`Name, Lat, Lon, Type, Priority, TimeFrom, TimeTo`) for ad-hoc planning without a dataset. Invalid lines are reported individually with the exact parse error.
 
 **Natural Language mode** — Describe your route in plain English. The AI extracts stops, priorities, time windows, and constraints. Inline GPS coordinates (`Dadar (19.018, 72.848) at 9am`) are detected and reverse-geocoded to real location names via OpenStreetMap/Nominatim automatically.
 
 **After generation (all modes):**
-- Interactive route map with color-coded stop types
+- Animated route map: vehicle icon travels along road-following polylines (not straight lines), with a color-coded legend and replay button anchored to the map's bottom edge
 - Constraint violation checker (time windows, driver hours, vehicle capacity)
 - Per-stop arrival-time weather forecast via Open-Meteo
 - Fuel cost panel with city price lookup and optimized vs. un-optimized route savings
 - Re-planning: describe any change in plain English and the AI updates the full itinerary
-- Export as JSON or CSV
+- Export as JSON, CSV, or branded PDF
 
-### 🧩 Clustering
+### PDF Export
+
+The PDF export produces a multi-page branded document:
+- **Header** (every page): RouteIQ logo + title on a dark background bar
+- **Footer** (every page): proprietary notice + gold page number
+- **Page 1**: itinerary summary — driver/vehicle/date, key metrics (distance, duration, efficiency, on-time probability)
+- **Stop table**: full 11-column paginated table with color-coded stop types, priorities, and risk levels
+- **Warnings / Notes**: optimization notes and constraint violations (omitted if empty)
+- **About page**: RouteIQ brand description and disclaimer
+
+### Clustering
 Choose cluster count (2–8), run KMeans + PCA on stop text features. Includes 2D scatter, keyword profiles, stacked composition bar, and a geographic scatter map.
 
-### 💬 AI Assistant
-Persistent chat interface grounded in the logistics knowledge base via RAG (ChromaDB semantic retrieval). Asks only about travel and logistics — out-of-scope questions are politely declined.
+### AI Assistant
+Persistent chat interface grounded in the logistics knowledge base via RAG (ChromaDB semantic retrieval). Answers only travel and logistics questions — out-of-scope questions are politely declined.
 
 Example questions: *"What documents do I need for customs clearance?"*, *"How do I handle a breakdown mid-route?"*, *"What is the e-way bill validity?"*
 
-### 📈 Performance
+### Performance
 On-time gauge, transport mode trend line, fuel cost comparison, delay reason breakdown, AI-generated performance insights, and full sortable data tables.
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
@@ -192,7 +198,7 @@ On-time gauge, transport mode trend line, fuel cost comparison, delay reason bre
 
 ---
 
-## 📦 Dependencies
+## Dependencies
 
 | Package | Purpose |
 |---|---|
@@ -204,23 +210,25 @@ On-time gauge, transport mode trend line, fuel cost comparison, delay reason bre
 | `scikit-learn` | TF-IDF, KMeans, PCA |
 | `pandas` | Data manipulation |
 | `plotly` | Interactive charts (Scattergeo, gauge, bar, line) |
+| `folium` | Interactive Leaflet.js maps with vehicle animation |
+| `reportlab` | Branded PDF generation |
 | `httpx` | HTTP client for OSRM, Open-Meteo, Nominatim APIs |
 | `python-dotenv` | `.env` config loading |
 | `numpy` | Numerical operations |
 
 ---
 
-## 🌐 External APIs Used (all free, no key required)
+## External APIs Used (all free, no key required)
 
 | API | Purpose | Fallback |
 |---|---|---|
-| [OSRM](http://router.project-osrm.org) | Real road distances and drive times | Haversine straight-line estimate |
+| [OSRM](http://router.project-osrm.org) | Real road distances, drive times, and road-following geometry | Haversine straight-line estimate |
 | [Open-Meteo](https://open-meteo.com) | Hourly weather forecast per stop at arrival time | Seasonal estimate with diurnal variation |
 | [Nominatim / OSM](https://nominatim.openstreetmap.org) | Reverse geocoding of GPS coordinates to location names | `"Location @ lat, lon"` label |
 
 ---
 
-## 💡 Extension Ideas
+## Extension Ideas
 
 - **VRPTW solver** (OR-Tools) — replace Nearest-Neighbor with a proper Vehicle Routing Problem solver for fleets of 5+ vehicles
 - **Live traffic integration** — HereMaps or TomTom API for dynamic ETA updates
@@ -228,3 +236,10 @@ On-time gauge, transport mode trend line, fuel cost comparison, delay reason bre
 - **IoT cold-chain monitoring** — integrate temperature sensor data into stop status
 - **Multi-day itineraries** — extend the planner to span multiple dates with driver rest constraints
 - **User authentication** — Streamlit Auth or Cognito to support per-driver dashboards
+- **Fleet dispatch view** — assign multiple routes to multiple drivers in a single planning session
+
+---
+
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.

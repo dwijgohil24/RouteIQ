@@ -10,6 +10,7 @@ from engines.weather import WeatherEngine
 from engines.fuel import FuelEngine
 from engines.geo import GeoEngine
 from engines.map_renderer import render_animated_map_in_streamlit
+from engines.pdf_exporter import generate_itinerary_pdf
 
 
 # ─────────────────────────────────────────────
@@ -331,7 +332,7 @@ def _render_fuel_panel(stops_list: list, constraints: dict, itin: dict):
 # ─────────────────────────────────────────────
 # ITINERARY RENDERER
 # ─────────────────────────────────────────────
-def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_override=None):
+def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_override=None, route_geometry=None):
     if constraints is None:
         constraints = {}
 
@@ -387,6 +388,7 @@ def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_overr
                 vehicle_type=_vehicle,
                 animation_duration_s=4.0,
                 height=500,
+                route_geometry=route_geometry,
             )
             st.caption(
                 f"🎬 {_vehicle} animation · Tap stops for details · Tap **↻ Replay** to rewatch"
@@ -530,7 +532,7 @@ def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_overr
             st.error("Please describe the change.")
 
     st.markdown("### 📤 Export")
-    col_e1, col_e2 = st.columns(2)
+    col_e1, col_e2, col_e3 = st.columns(3)
     with col_e1:
         st.download_button("⬇️ Download JSON", json.dumps(itin, indent=2, default=str),
                            "itinerary.json", "application/json", use_container_width=True)
@@ -539,6 +541,14 @@ def _render_itinerary(itin, stops_df, ai, dash, constraints=None, nl_stops_overr
         if stop_rows:
             st.download_button("⬇️ Download CSV", pd.DataFrame(stop_rows).to_csv(index=False),
                                "itinerary_stops.csv", "text/csv", use_container_width=True)
+    with col_e3:
+        try:
+            pdf_bytes = generate_itinerary_pdf(itin, constraints)
+            fname = f"routeiq_itinerary_{itin.get('date', 'export')}.pdf"
+            st.download_button("⬇️ Download PDF", pdf_bytes,
+                               fname, "application/pdf", use_container_width=True)
+        except Exception as _pdf_err:
+            st.error(f"PDF generation failed: {_pdf_err}")
 
 
 # ─────────────────────────────────────────────
@@ -559,8 +569,15 @@ def page_planner(stops_df, ai, ml, dash):
         if stops_df.empty:
             st.warning("No stops data loaded.")
         else:
-            routes         = stops_df["route_id"].unique().tolist()
-            selected_route = st.selectbox("Select Route to Plan", routes)
+            route_options = {}
+            for rid in sorted(stops_df["route_id"].unique()):
+                rdf   = stops_df[stops_df["route_id"] == rid]
+                n     = len(rdf)
+                first = rdf.iloc[0]["location_name"]
+                last  = rdf.iloc[-1]["location_name"]
+                route_options[f"{rid}  ({n} stops: {first} → {last})"] = rid
+            selected_label = st.selectbox("Select Route to Plan", list(route_options.keys()))
+            selected_route = route_options[selected_label]
             route_stops    = stops_df[stops_df["route_id"] == selected_route].copy()
 
             st.markdown(f"**{len(route_stops)} stops on route {selected_route}**")
@@ -610,6 +627,7 @@ def page_planner(stops_df, ai, ml, dash):
                 }
                 with st.spinner("🛰️ Fetching real road distances via OSRM…"):
                     osrm_preview = MLEngine.osrm_route([(s["lat"], s["lon"]) for s in stops_list])
+                st.session_state["road_geometry"] = osrm_preview.get("route_geometry")
                 st.caption(
                     "Routing: 🟢 OSRM (real roads)" if osrm_preview["source"] == "osrm"
                     else "Routing: 🟡 Haversine fallback (OSRM unreachable)"
@@ -692,6 +710,7 @@ def page_planner(stops_df, ai, ml, dash):
                 }
                 with st.spinner("🛰️ Fetching real road distances via OSRM…"):
                     osrm_cs = MLEngine.osrm_route([(s["lat"], s["lon"]) for s in custom_stops])
+                st.session_state["road_geometry"] = osrm_cs.get("route_geometry")
                 st.caption("Routing: 🟢 OSRM" if osrm_cs["source"] == "osrm" else "Routing: 🟡 Haversine fallback")
                 route_ctx = (
                     f"{len(custom_stops)} custom stops | Mode: {c_mode} | "
@@ -867,6 +886,7 @@ def page_planner(stops_df, ai, ml, dash):
                     if st.button("🚀 Generate Full Itinerary", type="primary", key="nl_generate"):
                         with st.spinner("🛰️ Fetching OSRM road distances…"):
                             osrm_nl = MLEngine.osrm_route([(s["lat"], s["lon"]) for s in stops_list])
+                        st.session_state["road_geometry"] = osrm_nl.get("route_geometry")
                         st.caption("Routing: 🟢 OSRM" if osrm_nl["source"] == "osrm" else "Routing: 🟡 Haversine fallback")
                         ctx_nl = (
                             f"{len(stops_list)} NL-parsed stops | "
@@ -916,4 +936,5 @@ def page_planner(stops_df, ai, ml, dash):
             itin, stops_df, ai, dash,
             st.session_state.get("last_constraints", {}),
             nl_stops_override=nl_map,
+            route_geometry=st.session_state.get("road_geometry"),
         )
