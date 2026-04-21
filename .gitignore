@@ -1,3 +1,4 @@
+.github/
 # Virtual Environment
 venv/
 env/
@@ -32,3 +33,9 @@ build/
 
 # Logs
 *.log
+
+data_60/stops.csv
+data_60/stops_1.csv
+data_60/stops (2).csv
+__pycache__/*
+*/__pycache__/*

@@ -70,25 +70,30 @@ class MLEngine:
         waypoints = ";".join(f"{lon},{lat}" for lat, lon in coords)
         url = (
             "http://router.project-osrm.org/route/v1/driving/" + waypoints
-            + "?overview=false&steps=false&annotations=false"
+            + "?overview=simplified&geometries=geojson&steps=false&annotations=false"
         )
         try:
             resp = httpx.get(url, timeout=8.0)
             data = resp.json()
             if data.get("code") != "Ok":
                 raise ValueError(f"OSRM code: {data.get('code')}")
+            route = data["routes"][0]
             legs = [
                 {
                     "distance_km":  round(leg["distance"] / 1000, 2),
                     "duration_min": round(leg["duration"] / 60, 1),
                 }
-                for leg in data["routes"][0]["legs"]
+                for leg in route["legs"]
             ]
+            # GeoJSON coords are [lon, lat] — flip to [lat, lon] for Folium
+            geom_coords = route.get("geometry", {}).get("coordinates", [])
+            route_geometry = [[c[1], c[0]] for c in geom_coords] if geom_coords else None
             return {
                 "legs":               legs,
                 "total_distance_km":  round(sum(l["distance_km"]  for l in legs), 2),
                 "total_duration_min": round(sum(l["duration_min"] for l in legs), 1),
                 "source":             "osrm",
+                "route_geometry":     route_geometry,
             }
         except Exception:
             legs = []
@@ -100,4 +105,5 @@ class MLEngine:
                 "total_distance_km":  round(sum(l["distance_km"]  for l in legs), 2),
                 "total_duration_min": round(sum(l["duration_min"] for l in legs), 1),
                 "source":             "haversine_fallback",
+                "route_geometry":     None,
             }

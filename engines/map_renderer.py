@@ -1,0 +1,371 @@
+"""
+Animated route map renderer using Folium (Leaflet.js).
+
+Generates interactive street-level maps with a vehicle icon that animates
+along the route polyline over ~4 seconds. Vehicle type (car, truck, van,
+motorcycle, tempo) is selected based on the user's transport/vehicle choice.
+
+Drop-in replacement for the Plotly Scattergeo map used in dashboard.py.
+
+KEY DESIGN NOTE: Folium's _repr_html_() wraps everything in an <iframe>
+with HTML-escaped srcdoc. Any JS appended *after* _repr_html_() goes
+OUTSIDE the iframe and cannot access the Leaflet map. We use
+branca.element.Element + m.get_root().html.add_child() to inject our
+animation script INSIDE the iframe's HTML before it gets escaped.
+"""
+
+import math
+import json
+import folium
+from branca.element import Element
+import streamlit.components.v1 as components
+
+
+# ── Vehicle SVG Icons (top-down silhouettes, facing right) ───────────────
+VEHICLE_ICONS = {
+    "Car": {
+        "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20" width="40" height="20">'
+            '<rect x="2" y="6" width="36" height="10" rx="4" fill="#D4A843" stroke="#0D1117" stroke-width="1"/>'
+            '<rect x="10" y="2" width="18" height="10" rx="3" fill="#E8C76A" stroke="#0D1117" stroke-width="1"/>'
+            '<circle cx="10" cy="17" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="30" cy="17" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<rect x="33" y="8" width="4" height="2" rx="1" fill="#E74C3C"/>'
+            '<rect x="1" y="9" width="3" height="1.5" rx="0.5" fill="#F0F6FC"/>'
+            '</svg>'
+        ),
+        "size": [40, 20],
+        "anchor": [20, 10],
+    },
+    "Truck": {
+        "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 22" width="48" height="22">'
+            '<rect x="2" y="4" width="30" height="14" rx="2" fill="#2EA4A4" stroke="#0D1117" stroke-width="1"/>'
+            '<rect x="32" y="6" width="14" height="12" rx="3" fill="#3FB950" stroke="#0D1117" stroke-width="1"/>'
+            '<circle cx="12" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="24" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="40" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<rect x="44" y="9" width="2" height="2" rx="0.5" fill="#E74C3C"/>'
+            '<rect x="32" y="8" width="6" height="5" rx="1" fill="rgba(255,255,255,0.3)"/>'
+            '</svg>'
+        ),
+        "size": [48, 22],
+        "anchor": [24, 11],
+    },
+    "Van": {
+        "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 20" width="44" height="20">'
+            '<rect x="2" y="4" width="28" height="13" rx="2" fill="#8957E5" stroke="#0D1117" stroke-width="1"/>'
+            '<rect x="30" y="5" width="12" height="12" rx="4" fill="#A371F7" stroke="#0D1117" stroke-width="1"/>'
+            '<circle cx="10" cy="18" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="36" cy="18" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<rect x="40" y="8" width="2" height="2" rx="0.5" fill="#E74C3C"/>'
+            '<rect x="31" y="7" width="5" height="4" rx="1" fill="rgba(255,255,255,0.3)"/>'
+            '</svg>'
+        ),
+        "size": [44, 20],
+        "anchor": [22, 10],
+    },
+    "Motorcycle": {
+        "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 20" width="36" height="20">'
+            '<path d="M10,10 Q18,2 28,8" stroke="#D4A843" stroke-width="2.5" fill="none" stroke-linecap="round"/>'
+            '<rect x="12" y="8" width="14" height="5" rx="2" fill="#D4A843" stroke="#0D1117" stroke-width="0.8"/>'
+            '<circle cx="8" cy="15" r="4" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="30" cy="15" r="4" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="8" cy="15" r="1.5" fill="#555"/>'
+            '<circle cx="30" cy="15" r="1.5" fill="#555"/>'
+            '</svg>'
+        ),
+        "size": [36, 20],
+        "anchor": [18, 10],
+    },
+    "Tempo": {
+        "svg": (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 22" width="44" height="22">'
+            '<rect x="2" y="5" width="26" height="13" rx="2" fill="#E8873A" stroke="#0D1117" stroke-width="1"/>'
+            '<rect x="28" y="6" width="14" height="12" rx="3" fill="#F0A860" stroke="#0D1117" stroke-width="1"/>'
+            '<circle cx="10" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="22" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<circle cx="38" cy="19" r="3" fill="#333" stroke="#888" stroke-width="0.8"/>'
+            '<rect x="40" y="9" width="2" height="2" rx="0.5" fill="#E74C3C"/>'
+            '<rect x="29" y="8" width="5" height="4" rx="1" fill="rgba(255,255,255,0.3)"/>'
+            '</svg>'
+        ),
+        "size": [44, 22],
+        "anchor": [22, 11],
+    },
+}
+
+STOP_COLORS = {
+    "Delivery": "#D4A843", "Pickup": "#3FB950", "Meeting": "#2EA4A4",
+    "Warehouse": "#8957E5", "Customs": "#E74C3C", "Rest": "#8B949E",
+}
+
+
+def _bearing(lat1, lon1, lat2, lon2):
+    """Compute bearing in degrees from point 1 to point 2."""
+    lat1, lon1 = math.radians(lat1), math.radians(lon1)
+    lat2, lon2 = math.radians(lat2), math.radians(lon2)
+    dlon = lon2 - lon1
+    x = math.sin(dlon) * math.cos(lat2)
+    y = (math.cos(lat1) * math.sin(lat2) -
+         math.sin(lat1) * math.cos(lat2) * math.cos(dlon))
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def _interpolate_path(coords, num_points=80):
+    """Interpolate between route coordinates for smooth animation frames."""
+    if len(coords) < 2:
+        return coords
+
+    distances = [0.0]
+    for i in range(1, len(coords)):
+        dlat = coords[i][0] - coords[i - 1][0]
+        dlon = coords[i][1] - coords[i - 1][1]
+        distances.append(distances[-1] + math.sqrt(dlat ** 2 + dlon ** 2))
+
+    total = distances[-1]
+    if total == 0:
+        return coords
+
+    points = []
+    for step in range(num_points + 1):
+        target_dist = (step / num_points) * total
+        seg = 0
+        for j in range(1, len(distances)):
+            if distances[j] >= target_dist:
+                seg = j - 1
+                break
+        else:
+            seg = len(distances) - 2
+
+        seg_len = distances[seg + 1] - distances[seg]
+        t = 0 if seg_len == 0 else (target_dist - distances[seg]) / seg_len
+        lat = coords[seg][0] + t * (coords[seg + 1][0] - coords[seg][0])
+        lon = coords[seg][1] + t * (coords[seg + 1][1] - coords[seg][1])
+        points.append([lat, lon])
+
+    return points
+
+
+def render_animated_route_map(
+    stops_list: list,
+    itinerary: dict = None,
+    vehicle_type: str = "Car",
+    animation_duration_s: float = 4.0,
+    map_height: int = 500,
+    route_geometry: list = None,
+) -> str:
+    """Build a Folium map with animated vehicle tracing the route."""
+    if not stops_list:
+        return "<p>No stops to display.</p>"
+
+    # ── Stop ordering ────────────────────────────────────────────────────
+    ordered_stops = stops_list[:]
+    if itinerary and "stops" in itinerary:
+        seq_map = {s["stop_id"]: s["sequence"] for s in itinerary["stops"]}
+        ordered_stops = sorted(stops_list, key=lambda s: seq_map.get(s["stop_id"], 999))
+
+    lats = [s["lat"] for s in ordered_stops]
+    lons = [s["lon"] for s in ordered_stops]
+    center_lat, center_lon = sum(lats) / len(lats), sum(lons) / len(lons)
+
+    # ── Auto-zoom ────────────────────────────────────────────────────────
+    span = max(max(lats) - min(lats), max(lons) - min(lons))
+    zoom = (14 if span < 0.05 else 13 if span < 0.1 else 12 if span < 0.3
+            else 11 if span < 0.5 else 10 if span < 1.0 else 9 if span < 2.0
+            else 8 if span < 5.0 else 7)
+
+    # ── Build map ────────────────────────────────────────────────────────
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom,
+                   tiles="cartodbdark_matter", control_scale=True)
+
+    # Planned route polyline (dashed gold)
+    route_coords = [[s["lat"], s["lon"]] for s in ordered_stops]
+    polyline_coords = route_geometry if (route_geometry and len(route_geometry) >= 2) else route_coords
+    folium.PolyLine(polyline_coords, color="#D4A843", weight=3,
+                    opacity=0.7, dash_array="8 4").add_to(m)
+
+    # Stop markers
+    for i, stop in enumerate(ordered_stops):
+        color = STOP_COLORS.get(stop.get("stop_type", "Delivery"), "#D4A843")
+        seq = i + 1
+        arrival = departure = ""
+        if itinerary and "stops" in itinerary:
+            ist = next((s for s in itinerary["stops"]
+                        if s["stop_id"] == stop["stop_id"]), None)
+            if ist:
+                arrival, departure = ist.get("arrival_time", ""), ist.get("departure_time", "")
+
+        popup = (f'<div style="font-family:sans-serif;font-size:13px;min-width:150px">'
+                 f'<b>{seq}. {stop["location_name"]}</b><br>'
+                 f'<span style="color:#555;font-size:11px">Type: {stop.get("stop_type","—")}')
+        if arrival:
+            popup += f'<br>Arrival: {arrival}'
+        if departure:
+            popup += f'<br>Departure: {departure}'
+        popup += '</span></div>'
+
+        icon_html = (
+            f'<div style="background:{color};color:#0D1117;width:26px;height:26px;'
+            f'border-radius:50%;display:flex;align-items:center;justify-content:center;'
+            f'font-weight:700;font-size:12px;font-family:sans-serif;'
+            f'border:2px solid #0D1117;box-shadow:0 2px 6px rgba(0,0,0,0.4)">'
+            f'{seq}</div>')
+
+        folium.Marker(
+            [stop["lat"], stop["lon"]],
+            popup=folium.Popup(popup, max_width=220),
+            icon=folium.DivIcon(html=icon_html, icon_size=[26, 26], icon_anchor=[13, 13]),
+        ).add_to(m)
+
+    # ── Animation + Legend + Replay ──────────────────────────────────────
+    vehicle = VEHICLE_ICONS.get(vehicle_type, VEHICLE_ICONS["Car"])
+    anim_coords = route_geometry if (route_geometry and len(route_geometry) >= 2) else route_coords
+    interpolated = _interpolate_path(anim_coords, num_points=80)
+    interval_ms = int((animation_duration_s * 1000) / max(len(interpolated), 1))
+    svg_esc = vehicle["svg"].replace("\\", "\\\\").replace("`", "\\`")
+
+    legend_items = "".join(
+        f'<div class="legend-item"><span class="legend-dot" style="display:inline-block;width:10px;height:10px;'
+        f'border-radius:50%;background:{c};margin-right:6px;vertical-align:middle"></span>{t}</div>'
+        for t, c in STOP_COLORS.items()
+    )
+
+    # All custom HTML/JS/CSS — injected into Folium's tree via Element
+    custom = f"""
+    <style>
+    .vehicle-icon-wrapper {{ background:none!important; border:none!important; }}
+    #routeiq-vehicle {{ filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5)); }}
+
+    </style>
+
+    <script>
+    // ── Vehicle animation ──
+    (function() {{
+        var path = {json.dumps(interpolated)};
+        var vehicleSvg = `{svg_esc}`;
+        var iconSize = {json.dumps(vehicle["size"])};
+        var iconAnchor = {json.dumps(vehicle["anchor"])};
+        var intervalMs = {interval_ms};
+
+        var _map = null, _marker = null, _trail = null, _tid = null;
+
+        function findMap() {{
+            for (var key in window) {{
+                if (key.indexOf('map_') === 0) {{
+                    try {{
+                        var obj = window[key];
+                        if (obj && typeof obj.getCenter === 'function' &&
+                            typeof obj.addLayer === 'function' &&
+                            typeof obj.getZoom === 'function') return obj;
+                    }} catch(e) {{}}
+                }}
+            }}
+            return null;
+        }}
+
+        function bearing(p1, p2) {{
+            var dLon = (p2[1]-p1[1])*Math.PI/180;
+            var la1 = p1[0]*Math.PI/180, la2 = p2[0]*Math.PI/180;
+            var y = Math.sin(dLon)*Math.cos(la2);
+            var x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
+            return ((Math.atan2(y,x)*180/Math.PI)+360)%360;
+        }}
+
+        function startAnim() {{
+            if (_tid) {{ clearTimeout(_tid); _tid = null; }}
+            if (_marker) {{ try {{ _map.removeLayer(_marker); }} catch(e) {{}} _marker = null; }}
+            if (_trail)  {{ try {{ _map.removeLayer(_trail);  }} catch(e) {{}} _trail  = null; }}
+
+            var icon = L.divIcon({{
+                html: '<div id="routeiq-vehicle" style="transition:transform 0.08s linear">' + vehicleSvg + '</div>',
+                iconSize: iconSize, iconAnchor: iconAnchor,
+                className: 'vehicle-icon-wrapper',
+            }});
+            _marker = L.marker(path[0], {{ icon: icon, zIndexOffset: 1000 }}).addTo(_map);
+            _trail  = L.polyline([], {{ color: '#3FB950', weight: 4, opacity: 0.9 }}).addTo(_map);
+
+            var step = 0;
+            function tick() {{
+                if (step >= path.length) {{
+                    var el = document.getElementById('routeiq-vehicle');
+                    if (el) el.style.filter = 'drop-shadow(0 0 8px #3FB950)';
+                    return;
+                }}
+                var pos = path[step];
+                _marker.setLatLng(pos);
+                _trail.addLatLng(pos);
+                if (step < path.length - 1) {{
+                    var b = bearing(pos, path[step + 1]);
+                    var el = document.getElementById('routeiq-vehicle');
+                    if (el) el.style.transform = 'rotate(' + (b - 90) + 'deg)';
+                }}
+                step++;
+                _tid = setTimeout(tick, intervalMs);
+            }}
+            _tid = setTimeout(tick, 800);
+        }}
+
+        window._routeiqReplay = function() {{ if (_map) startAnim(); }};
+
+        function run(map) {{
+            _map = map;
+            startAnim();
+        }}
+
+        var attempts = 0;
+        var poller = setInterval(function() {{
+            attempts++;
+            var map = findMap();
+            if (map) {{ clearInterval(poller); run(map); }}
+            else if (attempts > 50) clearInterval(poller);
+        }}, 100);
+    }})();
+    </script>
+    """
+
+    m.get_root().html.add_child(Element(custom))
+    return m._repr_html_()
+
+
+def render_animated_map_in_streamlit(
+    stops_list: list, itinerary: dict = None,
+    vehicle_type: str = "Car", animation_duration_s: float = 4.0, height: int = 500,
+    route_geometry: list = None,
+):
+    """Render animated map, then show legend + replay button outside the canvas."""
+    import streamlit as st
+
+    html = render_animated_route_map(
+        stops_list, itinerary, vehicle_type, animation_duration_s, height, route_geometry)
+    components.html(html, height=height, scrolling=False)
+
+    # ── Legend + Replay rendered by Streamlit — fully outside the map iframe ─
+    col_leg, col_rep = st.columns([5, 1])
+    with col_leg:
+        dots = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:5px;'
+            f'margin-right:14px;white-space:nowrap">'
+            f'<span style="display:inline-block;width:10px;height:10px;'
+            f'border-radius:50%;background:{c};flex-shrink:0"></span>'
+            f'<span style="color:#C9D1D9;font-size:0.78rem">{t}</span></span>'
+            for t, c in STOP_COLORS.items()
+        )
+        st.markdown(
+            f'<div style="display:flex;flex-wrap:wrap;align-items:center;'
+            f'padding:4px 0 0 0;gap:2px">'
+            f'<span style="color:#8B949E;font-size:0.78rem;font-weight:600;'
+            f'margin-right:10px">Legend:</span>'
+            f'{dots}'
+            f'<span style="color:#8B949E;font-size:0.78rem;margin-left:6px">'
+            f'<span style="color:#D4A843">&#8211;&#8211;</span>&nbsp;Planned&nbsp;&nbsp;'
+            f'<span style="color:#3FB950">&#9135;</span>&nbsp;Vehicle trail</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with col_rep:
+        if st.button("↺ Replay", key=f"riq_replay_{id(stops_list)}",
+                     use_container_width=True):
+            st.rerun()
