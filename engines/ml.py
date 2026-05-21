@@ -1,8 +1,9 @@
 import math
-import httpx
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+
+from .routing import get_default_strategy
 
 
 class MLEngine:
@@ -21,9 +22,9 @@ class MLEngine:
         X = self.vectorizer.fit_transform(texts)
         self.feature_matrix = X
         self.kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        labels    = self.kmeans.fit_predict(X)
-        pca       = PCA(n_components=2, random_state=42)
-        X_2d      = pca.fit_transform(X.toarray())
+        labels = self.kmeans.fit_predict(X)
+        pca    = PCA(n_components=2, random_state=42)
+        X_2d   = pca.fit_transform(X.toarray())
         return labels, X_2d
 
     def get_cluster_keywords(self, top_n=5):
@@ -63,47 +64,11 @@ class MLEngine:
 
     @staticmethod
     def osrm_route(coords: list) -> dict:
+        """Delegates to the module-level routing strategy (Strategy Pattern).
+        Swap the strategy via engines.routing.set_default_strategy() without
+        touching this method or any of its callers."""
         if len(coords) < 2:
             return {"legs": [], "total_distance_km": 0.0,
-                    "total_duration_min": 0.0, "source": "osrm"}
-
-        waypoints = ";".join(f"{lon},{lat}" for lat, lon in coords)
-        url = (
-            "http://router.project-osrm.org/route/v1/driving/" + waypoints
-            + "?overview=simplified&geometries=geojson&steps=false&annotations=false"
-        )
-        try:
-            resp = httpx.get(url, timeout=8.0)
-            data = resp.json()
-            if data.get("code") != "Ok":
-                raise ValueError(f"OSRM code: {data.get('code')}")
-            route = data["routes"][0]
-            legs = [
-                {
-                    "distance_km":  round(leg["distance"] / 1000, 2),
-                    "duration_min": round(leg["duration"] / 60, 1),
-                }
-                for leg in route["legs"]
-            ]
-            # GeoJSON coords are [lon, lat] — flip to [lat, lon] for Folium
-            geom_coords = route.get("geometry", {}).get("coordinates", [])
-            route_geometry = [[c[1], c[0]] for c in geom_coords] if geom_coords else None
-            return {
-                "legs":               legs,
-                "total_distance_km":  round(sum(l["distance_km"]  for l in legs), 2),
-                "total_duration_min": round(sum(l["duration_min"] for l in legs), 1),
-                "source":             "osrm",
-                "route_geometry":     route_geometry,
-            }
-        except Exception:
-            legs = []
-            for i in range(len(coords) - 1):
-                d = MLEngine._haversine(coords[i], coords[i + 1])
-                legs.append({"distance_km": round(d, 2), "duration_min": round(d / 35 * 60, 1)})
-            return {
-                "legs":               legs,
-                "total_distance_km":  round(sum(l["distance_km"]  for l in legs), 2),
-                "total_duration_min": round(sum(l["duration_min"] for l in legs), 1),
-                "source":             "haversine_fallback",
-                "route_geometry":     None,
-            }
+                    "total_duration_min": 0.0, "source": "osrm",
+                    "route_geometry": None}
+        return get_default_strategy().route(coords)

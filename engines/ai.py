@@ -7,9 +7,10 @@ from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from .ml import MLEngine
-from .rag import RAGEngine
-from .fuel import FuelEngine
+from .ml         import MLEngine
+from .rag        import RAGEngine
+from .fuel       import FuelEngine
+from .violations import build_chain
 
 
 class AIEngine:
@@ -278,10 +279,11 @@ class AIEngine:
         return self._parse_json(self._call(system_prompt, user_prompt), existing_itinerary)
 
     def check_violations(self, itinerary: dict, constraints: dict) -> list:
-        violations = []
-        stops      = sorted(itinerary.get("stops", []), key=lambda s: s["sequence"])
+        """Delegates to Chain of Responsibility (engines/violations.py).
+        Add new violation types there without touching this method."""
+        stops = sorted(itinerary.get("stops", []), key=lambda s: s["sequence"])
         if not stops:
-            return violations
+            return []
 
         date_str = itinerary.get("date", datetime.now().strftime("%Y-%m-%d"))
         try:
@@ -289,68 +291,8 @@ class AIEngine:
         except Exception:
             base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        def to_dt(hhmm):
-            try:
-                h, m = map(int, str(hhmm).strip().split(":"))
-                return base.replace(hour=h, minute=m, second=0, microsecond=0)
-            except Exception:
-                return base
-
-        max_hours      = constraints.get("max_hours", 10)
-        day_end        = to_dt(constraints.get("start_time", "08:00")) + timedelta(hours=max_hours)
-        capacity_kg    = constraints.get("vehicle_capacity_kg")
-        total_load_kg  = sum(s.get("load_kg", 0) for s in stops)
-        if capacity_kg and total_load_kg > capacity_kg:
-            violations.append({
-                "sequence": 0, "location_name": "All stops",
-                "type": "capacity", "severity": "Critical",
-                "detail": (
-                    f"Total load {total_load_kg} kg exceeds vehicle capacity "
-                    f"{capacity_kg} kg by {total_load_kg - capacity_kg} kg."
-                ),
-            })
-
-        for s in stops:
-            arr          = to_dt(s.get("arrival_time",   "00:00"))
-            dep          = to_dt(s.get("departure_time",  "00:00"))
-            tw_start_raw = s.get("time_window_start", "")
-            tw_end_raw   = s.get("time_window_end",   "")
-
-            if tw_start_raw and tw_end_raw:
-                tw_start = to_dt(tw_start_raw)
-                tw_end   = to_dt(tw_end_raw)
-                if arr < tw_start:
-                    wait = int((tw_start - arr).seconds / 60)
-                    violations.append({
-                        "sequence": s["sequence"], "location_name": s.get("location_name",""),
-                        "type": "time_window", "severity": "Warning",
-                        "detail": (
-                            f"Arrives at {s.get('arrival_time')} but window opens at "
-                            f"{tw_start_raw}. Driver waits {wait} min."
-                        ),
-                    })
-                elif arr > tw_end:
-                    late = int((arr - tw_end).seconds / 60)
-                    violations.append({
-                        "sequence": s["sequence"], "location_name": s.get("location_name",""),
-                        "type": "time_window", "severity": "Critical",
-                        "detail": (
-                            f"Arrives at {s.get('arrival_time')} — window closed at "
-                            f"{tw_end_raw}. Late by {late} min. SLA breach."
-                        ),
-                    })
-
-            if dep > day_end:
-                over = int((dep - day_end).seconds / 60)
-                violations.append({
-                    "sequence": s["sequence"], "location_name": s.get("location_name",""),
-                    "type": "driver_hours", "severity": "Critical",
-                    "detail": (
-                        f"Departure at {s.get('departure_time')} exceeds "
-                        f"{max_hours}h limit by {over} min."
-                    ),
-                })
-
+        violations: list = []
+        build_chain().check(stops, constraints, base, violations)
         return violations
 
     def warm_up_rag(self, kb_df):

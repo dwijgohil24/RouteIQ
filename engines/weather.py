@@ -1,6 +1,7 @@
-import httpx
 import streamlit as st
 from datetime import datetime
+
+from core.http_client import get_http_adapter
 
 
 class WeatherEngine:
@@ -102,19 +103,11 @@ class WeatherEngine:
             "https://api.open-meteo.com/v1/forecast" + params,
             "http://api.open-meteo.com/v1/forecast"  + params,
         ]
-        for url in urls:
-            try:
-                resp = httpx.get(url, timeout=8.0, follow_redirects=True)
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                if "hourly" not in data or "time" not in data.get("hourly", {}):
-                    continue
-                cache[cache_key] = data
-                st.session_state["weather_cache"] = cache
-                return data
-            except Exception:
-                continue
+        data = get_http_adapter().get(urls)
+        if data and "hourly" in data and "time" in data.get("hourly", {}):
+            cache[cache_key] = data
+            st.session_state["weather_cache"] = cache
+            return data
         return None
 
     @classmethod
