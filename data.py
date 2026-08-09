@@ -1,37 +1,29 @@
-import os
+"""
+DataLoader — thin facade over the Repository layer.
+
+Callers (app.py) use DataLoader as before; internally it delegates to
+StopsRepository, RoutesRepository, and KBRepository (Repository Pattern).
+The coupled generation step lives in core.repository._DataSeeder.
+"""
 import pandas as pd
+
+from core.repository import make_repositories
 
 
 class DataLoader:
-    STOPS_FILE  = "stops.csv"
-    ROUTES_FILE = "routes.csv"
-    KB_FILE     = "logistics_kb.csv"
+    def __init__(self):
+        self._stops_repo, self._routes_repo, self._kb_repo = make_repositories()
 
-    def load_stops(self):
-        if not os.path.exists(self.STOPS_FILE):
-            self._generate_and_save()
-        return pd.read_csv(self.STOPS_FILE, parse_dates=["time_window_start", "time_window_end"])
+    def load_stops(self) -> pd.DataFrame:
+        return self._stops_repo.load()
 
-    def load_routes(self):
-        if not os.path.exists(self.ROUTES_FILE):
-            self._generate_and_save()
-        return pd.read_csv(self.ROUTES_FILE)
+    def load_routes(self) -> pd.DataFrame:
+        return self._routes_repo.load()
 
-    def load_kb(self):
-        if not os.path.exists(self.KB_FILE):
-            self._generate_and_save()
-        return pd.read_csv(self.KB_FILE)
+    def load_kb(self) -> pd.DataFrame:
+        return self._kb_repo.load()
 
-    def _generate_and_save(self):
-        from generate_data import generate_stops, generate_routes, generate_kb
-        stops  = generate_stops(60)
-        routes = generate_routes(stops)
-        kb     = generate_kb()
-        stops.to_csv(self.STOPS_FILE,  index=False)
-        routes.to_csv(self.ROUTES_FILE, index=False)
-        kb.to_csv(self.KB_FILE,         index=False)
-
-    def get_summary_stats(self, stops_df, routes_df):
+    def get_summary_stats(self, stops_df: pd.DataFrame, routes_df: pd.DataFrame) -> dict:
         if stops_df.empty:
             return {}
         return {

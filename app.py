@@ -21,10 +21,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from config import inject_css, init_session
-from data import DataLoader
-from dashboard import Dashboard
-from engines import MLEngine, AIEngine
+from config          import inject_css, init_session
+from data            import DataLoader
+from dashboard       import Dashboard
+from engines.factory import EngineFactory
 from views import (
     page_overview, page_planner, page_clustering,
     page_assistant, page_performance,
@@ -35,12 +35,12 @@ inject_css()
 
 @st.cache_resource(show_spinner="🤖 Loading AI engine…")
 def get_ai_engine():
-    return AIEngine()
+    return EngineFactory.create_ai_engine()
 
 
 @st.cache_resource(show_spinner=False)
 def get_ml_engine():
-    return MLEngine()
+    return EngineFactory.create_ml_engine()
 
 
 @st.cache_resource(show_spinner=False)

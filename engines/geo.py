@@ -1,6 +1,7 @@
 import time
-import httpx
 import streamlit as st
+
+from core.http_client import get_http_adapter
 
 
 class GeoEngine:
@@ -24,46 +25,32 @@ class GeoEngine:
         }
         headers = {"User-Agent": "RouteIQ-Logistics/1.0"}
 
+        urls   = [f"{s}://nominatim.openstreetmap.org/reverse" for s in ("https", "http")]
+        data   = get_http_adapter().get(urls, params=params, headers=headers)
         result = None
-        for scheme in ("https", "http"):
-            url = f"{scheme}://nominatim.openstreetmap.org/reverse"
-            try:
-                resp = httpx.get(
-                    url, params=params, headers=headers,
-                    timeout=6.0, follow_redirects=True,
-                )
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                if "error" in data:
-                    continue
 
-                addr  = data.get("address", {})
-                parts = []
-                for key_try in ("amenity", "shop", "building", "tourism",
-                                "road", "neighbourhood", "suburb",
-                                "village", "town", "city_district", "city"):
-                    val = addr.get(key_try, "")
-                    if val and val not in parts:
-                        parts.append(val)
-                    if len(parts) >= 2:
-                        break
-                city  = addr.get("city") or addr.get("town") or addr.get("village") or ""
-                if city and city not in parts:
-                    parts.append(city)
-
-                display = ", ".join(parts) if parts else data.get("display_name", "Unknown location")
-                if len(display) > 60:
-                    display = display[:57] + "…"
-
-                result = {
-                    "display_name": display,
-                    "full_address": data.get("display_name", display),
-                    "source":       "nominatim",
-                }
-                break
-            except Exception:
-                continue
+        if data and "error" not in data:
+            addr  = data.get("address", {})
+            parts = []
+            for key_try in ("amenity", "shop", "building", "tourism",
+                            "road", "neighbourhood", "suburb",
+                            "village", "town", "city_district", "city"):
+                val = addr.get(key_try, "")
+                if val and val not in parts:
+                    parts.append(val)
+                if len(parts) >= 2:
+                    break
+            city = addr.get("city") or addr.get("town") or addr.get("village") or ""
+            if city and city not in parts:
+                parts.append(city)
+            display = ", ".join(parts) if parts else data.get("display_name", "Unknown location")
+            if len(display) > 60:
+                display = display[:57] + "…"
+            result = {
+                "display_name": display,
+                "full_address": data.get("display_name", display),
+                "source":       "nominatim",
+            }
 
         if result is None:
             result = {
